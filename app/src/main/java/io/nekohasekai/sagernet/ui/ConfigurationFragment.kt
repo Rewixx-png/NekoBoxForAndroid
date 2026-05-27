@@ -842,28 +842,24 @@ class ConfigurationFragment @JvmOverloads constructor(
         val mainJob = runOnDefaultDispatcher {
             val profilesList = SagerDatabase.proxyDao.getByGroup(group.id)
             test.proxyN = profilesList.size
-            val profiles = ConcurrentLinkedQueue(profilesList)
-            repeat(DataStore.connectionTestConcurrent) {
+            for (profile in profilesList) {
                 testJobs.add(launch(Dispatchers.IO) {
-                    val urlTest = UrlTest() // note: this is NOT in bg process
-                    while (isActive) {
-                        val profile = profiles.poll() ?: break
-                        profile.status = 0
+                    profile.status = 0
+                    test.update(profile)
 
-                        try {
-                            val result = urlTest.doTest(profile)
-                            profile.status = 1
-                            profile.ping = result
-                        } catch (e: PluginManager.PluginNotFoundException) {
-                            profile.status = 2
-                            profile.error = e.readableMessage
-                        } catch (e: Exception) {
-                            profile.status = 3
-                            profile.error = e.readableMessage
-                        }
-
-                        test.update(profile)
+                    try {
+                        val result = UrlTest().doTest(profile)
+                        profile.status = 1
+                        profile.ping = result
+                    } catch (e: PluginManager.PluginNotFoundException) {
+                        profile.status = 2
+                        profile.error = e.readableMessage
+                    } catch (e: Exception) {
+                        profile.status = 3
+                        profile.error = e.readableMessage
                     }
+
+                    test.update(profile)
                 })
             }
 
