@@ -104,8 +104,11 @@ fun String.decodeBase64UrlSafe(): String {
 class SubscriptionFoundException(val link: String) : RuntimeException()
 
 suspend fun parseProxies(text: String): List<AbstractBean> {
-    val links = text.split('\n').flatMap { it.trim().split(' ') }
-    val linksByLine = text.split('\n').map { it.trim() }
+    val cleanLines = text.split('\n')
+        .map { it.trim() }
+        .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") && !it.startsWith(";") }
+    val links = cleanLines.flatMap { it.split(' ') }.filter { it.isNotEmpty() }
+    val linksByLine = cleanLines
 
     val entities = ArrayList<AbstractBean>()
     val entitiesByLine = ArrayList<AbstractBean>()
