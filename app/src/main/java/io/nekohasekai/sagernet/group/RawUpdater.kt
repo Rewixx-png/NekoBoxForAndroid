@@ -59,6 +59,7 @@ object RawUpdater : GroupUpdater() {
             val response = Libcore.newHttpClient().apply {
                 trySocks5(DataStore.mixedPort)
                 tryH3Direct()
+                keepAlive()
                 when (DataStore.appTLSVersion) {
                     "1.3" -> restrictedTLS()
                 }

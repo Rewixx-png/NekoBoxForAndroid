@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/sagernet/quic-go"
@@ -115,7 +116,9 @@ func (c *httpClient) PinnedSHA256(sumHex string) {
 }
 
 func (c *httpClient) TrySocks5(port int32) {
-	dialer := new(net.Dialer)
+	dialer := &net.Dialer{
+		Control: protectSocket,
+	}
 	c.h1h2Transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		for {
 			socksConn, err := dialer.DialContext(ctx, "tcp", "127.0.0.1:"+strconv.Itoa(int(port)))
@@ -210,12 +213,18 @@ func (r *httpRequest) Execute() (HTTPResponse, error) {
 	defer device.DeferPanicToError("http execute", func(err error) { log.Println(err) })
 	// full direct
 	if r.tryH3Direct && !r.trySocks5 {
+		if r.request.URL != nil && r.request.URL.Scheme == "http" {
+			return r.doPlainDirect()
+		}
 		return r.doH3Direct()
 	}
 	response, err := r.h1h2Client.Do(&r.request)
 	if err != nil {
 		// trySocks5 && tryH3Direct
 		if r.tryH3Direct && errors.Is(err, errFailConnectSocks5) {
+			if r.request.URL != nil && r.request.URL.Scheme == "http" {
+				return r.doPlainDirect()
+			}
 			return r.doH3Direct()
 		}
 		return nil, err
@@ -246,7 +255,9 @@ func (r *httpRequest) doH3Direct() (HTTPResponse, error) {
 			echClient := &http.Client{
 				Transport: &http.Transport{
 					DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-						var d net.Dialer
+						d := net.Dialer{
+							Control: protectSocket,
+						}
 						c, err := d.DialContext(ctx, network, addr)
 						if err != nil {
 							return c, err
@@ -342,6 +353,28 @@ func (r *httpRequest) doH3Direct() (HTTPResponse, error) {
 	}
 }
 
+func (r *httpRequest) doPlainDirect() (HTTPResponse, error) {
+	dialer := &net.Dialer{
+		Control: protectSocket,
+	}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext:       dialer.DialContext,
+			DisableKeepAlives: false,
+		},
+	}
+	request := r.request.Clone(context.Background())
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	httpResp := &httpResponse{Response: response}
+	if response.StatusCode != http.StatusOK {
+		return nil, errors.New(httpResp.errorString())
+	}
+	return httpResp, nil
+}
+
 type httpResponse struct {
 	*http.Response
 
@@ -398,4 +431,16 @@ func (h *httpResponse) WriteTo(path string) error {
 	defer file.Close()
 	_, err = io.Copy(file, h.Body)
 	return err
+}
+
+func protectSocket(network, address string, c syscall.RawConn) error {
+	return c.Control(func(fd uintptr) {
+		if intfBox != nil {
+			if !isBgProcess {
+				_ = sendFdToProtect(int(fd), "protect_path")
+			} else {
+				_ = intfBox.AutoDetectInterfaceControl(int32(fd))
+			}
+		}
+	})
 }
